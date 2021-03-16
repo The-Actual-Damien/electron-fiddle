@@ -1,0 +1,3 @@
+- what happens if from the command line you select a version of electron that isn't visible b/c beta or nightly
+- synchronous commands from ipc
+- --gist url

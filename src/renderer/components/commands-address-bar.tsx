@@ -5,7 +5,7 @@ import { observer } from 'mobx-react';
 import * as React from 'react';
 
 import { IpcEvents } from '../../ipc-events';
-import { GistActionState } from '../../interfaces';
+import { GistActionState, GistInfo } from '../../interfaces';
 import { idFromUrl, urlFromId } from '../../utils/gist';
 import { ipcRendererManager } from '../ipc';
 import { AppState } from '../state';
@@ -14,10 +14,12 @@ export interface AddressBarProps {
   appState: AppState;
 }
 
+type GistLoader = (gistInfo: GistInfo) => Promise<boolean>;
+
 export interface AddressBarState {
   value: string;
   loaders: {
-    gist: any;
+    gist: GistLoader;
     example: any;
   };
 }
@@ -83,7 +85,10 @@ export class AddressBar extends React.Component<
       () => appState.gistId,
       (gistId: string) => this.setState({ value: urlFromId(gistId) }),
     );
-    ipcRendererManager.on(IpcEvents.LOAD_GIST_REQUEST, loaders.gist);
+    ipcRendererManager.on(IpcEvents.LOAD_GIST_REQUEST, async (_, gistInfo: GistInfo) => {
+      const success = await loaders.gist(gistInfo);
+      ipcRendererManager.send(IpcEvents.COMMAND_DONE, success);
+    });
     ipcRendererManager.on(
       IpcEvents.LOAD_ELECTRON_EXAMPLE_REQUEST,
       loaders.example,

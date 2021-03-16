@@ -1,7 +1,7 @@
 import { ChildProcess, spawn } from 'child_process';
 import * as path from 'path';
 
-import { EditorValues, FileTransform, RunnableVersion } from '../interfaces';
+import { BisectResult, EditorValues, FileTransform, RunResult, RunnableVersion, VersionState } from '../interfaces';
 import { IpcEvents } from '../ipc-events';
 import { PackageJsonOptions } from '../utils/get-package';
 import { maybePlural } from '../utils/plural-maybe';
@@ -22,12 +22,6 @@ export enum ForgeCommands {
   MAKE = 'make',
 }
 
-export enum RunResult {
-  SUCCESS = 'success', // exit code === 0
-  FAILURE = 'failure', // ran, but exit code !== 0
-  INVALID = 'invalid', // could not run
-}
-
 function getResultEmoji(
   result: RunResult
 ): string {
@@ -43,13 +37,17 @@ export class Runner {
 
   constructor(private readonly appState: AppState) {
     this.run = this.run.bind(this);
+    this.test = this.test.bind(this);
     this.stop = this.stop.bind(this);
 
+    ipcRendererManager.removeAllListeners(IpcEvents.FIDDLE_BISECT);
     ipcRendererManager.removeAllListeners(IpcEvents.FIDDLE_RUN);
     ipcRendererManager.removeAllListeners(IpcEvents.FIDDLE_PACKAGE);
     ipcRendererManager.removeAllListeners(IpcEvents.FIDDLE_MAKE);
 
-    ipcRendererManager.on(IpcEvents.FIDDLE_RUN, this.run);
+    ipcRendererManager.on(IpcEvents.FIDDLE_BISECT,
+      (_event, first: string, last: string) => this.onBisectIpc(first, last));
+    ipcRendererManager.on(IpcEvents.FIDDLE_RUN, this.test);
     ipcRendererManager.on(IpcEvents.FIDDLE_PACKAGE, () => {
       this.performForgeOperation(ForgeCommands.PACKAGE);
     });
@@ -77,31 +75,32 @@ export class Runner {
     return results;
   }
 
-  public async autobisect(versions: Array<RunnableVersion>): Promise<void> {
+  public async autobisect(versions: Array<RunnableVersion>): Promise<BisectResult> {
+    const ret: BisectResult = {};
+
     const bisector = new Bisector(versions);
     let targetVersion = bisector.getCurrentVersion();
 
     while (true) {
-      // TODO: assumes that the version is already installed
       const { version } = targetVersion;
       this.appState.pushOutput(`Testing ${version}`, { isNotPre: true });
+
       await this.appState.setVersion(version);
       const result = await this.run(true);
       this.appState.pushOutput(`Bisect Test: ${getResultEmoji(result)} ${result} - Electron ${version}`);
 
       if (result === RunResult.INVALID) {
-        throw new Error('autobisect failed to run a version of electrion. make sure all versions you want to test are already installed.');
+        throw new Error(`Bisect: failed to test with Electron ${version}`);
       }
 
       const next = bisector.continue(result === RunResult.SUCCESS);
 
       if (Array.isArray(next)) {
-        console.log('finished autobisect', next);
-        const [ good, bad ] = next.map(v => `v${v.version}`);
-        const url = `https://github.com/electron/electron/compare/${good}...${bad}`;
-        this.appState.pushOutput('autobisect finished.');
-        this.appState.pushOutput(`${good} ${getResultEmoji(RunResult.SUCCESS)} passed`);
-        this.appState.pushOutput(`${bad} ${getResultEmoji(RunResult.FAILURE)} failed`);
+        [ ret.goodVersion, ret.badVersion ] = next.map(v => `v${v.version}`);
+        const url = `https://github.com/electron/electron/compare/${ret.goodVersion}...${ret.badVersion}`;
+        this.appState.pushOutput('Runner: Autobisect complete');
+        this.appState.pushOutput(`${ret.goodVersion} ${getResultEmoji(RunResult.SUCCESS)} passed`);
+        this.appState.pushOutput(`${ret.badVersion} ${getResultEmoji(RunResult.FAILURE)} failed`);
         this.appState.pushOutput('Commits between versions:');
         this.appState.pushOutput(url);
         break;
@@ -109,6 +108,24 @@ export class Runner {
         targetVersion = next;
       }
     }
+
+    return ret;
+  }
+
+  private async onBisectIpc(firstVersion: string, lastVersion: string) {
+    let versions = [...this.appState.versionsToShow].reverse();
+    const findIndex = (needle: string) => {
+      const idx = versions.findIndex((v: RunnableVersion) => v.version === needle);
+      if (idx === -1) {
+        throw new Error(`Bisect: version '${needle}' not found`);
+      }
+      return idx;
+    }
+    const firstIndex = findIndex(firstVersion);
+    const lastIndex = findIndex(lastVersion);
+    versions = versions.slice(firstIndex, lastIndex+1);
+    console.debug('Bisect range:', versions.map((v) => v.version));
+    ipcRendererManager.send(IpcEvents.BISECT_DONE, await this.autobisect(versions));
   }
 
   /**
@@ -127,9 +144,14 @@ export class Runner {
    * @returns {Promise<RunResult>}
    */
   public async run(test?: boolean): Promise<RunResult> {
-    const { fileManager, getEditorValues } = window.ElectronFiddle.app;
-    const options = { includeDependencies: false, includeElectron: false };
+    // if it's not ready, wait for it to download
     const { currentElectronVersion } = this.appState;
+    console.log('one', JSON.stringify(currentElectronVersion));
+    if (currentElectronVersion.state !== VersionState.ready) {
+      await this.appState.setVersion(currentElectronVersion.version);
+    };
+    console.log('two', JSON.stringify(this.appState.currentElectronVersion));
+
     const { version, localPath } = currentElectronVersion;
 
     if (this.appState.isClearingConsoleOnRun) {
@@ -137,6 +159,8 @@ export class Runner {
     }
     this.appState.isConsoleShowing = true;
 
+    const { fileManager, getEditorValues } = window.ElectronFiddle.app;
+    const options = { includeDependencies: false, includeElectron: false };
     const values = await getEditorValues(options);
     const dir = await this.saveToTemp(options);
     const packageManager = this.appState.packageManager;
@@ -167,7 +191,10 @@ export class Runner {
     }
 
     const executor = test ? this.playwright : this.execute;
-    return executor.call(this, dir);
+    const result: RunResult = await executor.call(this, dir);
+
+    ipcRendererManager.send(IpcEvents.RUN_DONE, result);
+    return result;
   }
 
   /**

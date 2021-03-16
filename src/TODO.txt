@@ -1,0 +1,3 @@
+ - [ ] 'test' needs to return success / failure. Currently it's just failing
+ - [ ] 'test' hits an error saying 'please wait until it is downloaded'
+ - [ ] check for unnecessary console.logs

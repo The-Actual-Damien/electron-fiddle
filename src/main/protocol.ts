@@ -14,7 +14,7 @@ const squirrelPath = path.resolve(
   'electron-fiddle.exe',
 );
 
-const handlePotentialProtocolLaunch = (url: string) => {
+export const handlePotentialProtocolLaunch = (url: string) => {
   if (!app.isReady()) {
     app.once('ready', () => handlePotentialProtocolLaunch(url));
     return;

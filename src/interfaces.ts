@@ -29,6 +29,11 @@ export enum GistActionState {
   none = 'none',
 }
 
+export interface GistInfo {
+  id: string;
+  confirmed?: boolean;
+}
+
 export interface Version {
   version: string;
   name?: string;
@@ -45,11 +50,29 @@ export interface EditorValues {
   package?: string;
 }
 
+export interface BisectResult {
+  goodVersion?: string;
+  badVersion?: string;
+}
+
+export enum RunResult {
+  SUCCESS = 'success', // exit code === 0
+  FAILURE = 'failure', // ran, but exit code !== 0
+  INVALID = 'invalid', // could not run
+}
+
 export interface RunnableVersion extends Version {
   state: VersionState;
   source: VersionSource;
   downloadProgress?: number;
 }
+
+export const enum ElectronReleaseChannel {
+  stable = 'Stable',
+  beta = 'Beta',
+  nightly = 'Nightly',
+  unsupported = 'Unsupported',
+};
 
 export interface SetFiddleOptions {
   filePath?: string;

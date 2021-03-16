@@ -7,6 +7,7 @@ import {
   BlockableAccelerator,
   DocsDemoPage,
   EditorId,
+  ElectronReleaseChannel,
   GenericDialogOptions,
   GenericDialogType,
   GistActionState,
@@ -50,7 +51,6 @@ import { sortedElectronMap } from '../utils/sorted-electron-map';
 import { IPackageManager } from './npm';
 import {
   addLocalVersion,
-  ElectronReleaseChannel,
   getDefaultVersion,
   getElectronVersions,
   getReleaseChannel,
@@ -207,12 +207,20 @@ export class AppState {
     this.setIsQuitting = this.setIsQuitting.bind(this);
     this.addAcceleratorToBlock = this.addAcceleratorToBlock.bind(this);
     this.removeAcceleratorToBlock = this.removeAcceleratorToBlock.bind(this);
+    this.hideChannels = this.hideChannels.bind(this);
+    this.showChannels = this.showChannels.bind(this);
 
+    ipcRendererManager.removeAllListeners(IpcEvents.HIDE_CHANNELS);
+    ipcRendererManager.removeAllListeners(IpcEvents.SHOW_CHANNELS);
     ipcRendererManager.removeAllListeners(IpcEvents.OPEN_SETTINGS);
     ipcRendererManager.removeAllListeners(IpcEvents.SHOW_WELCOME_TOUR);
     ipcRendererManager.removeAllListeners(IpcEvents.CLEAR_CONSOLE);
     ipcRendererManager.removeAllListeners(IpcEvents.BISECT_COMMANDS_TOGGLE);
+    ipcRendererManager.removeAllListeners(IpcEvents.SET_VERSION);
 
+    ipcRendererManager.on(IpcEvents.SET_VERSION, (_, v) => this.setVersion(v));
+    ipcRendererManager.on(IpcEvents.HIDE_CHANNELS, (_, ...channels) => this.hideChannels(channels));
+    ipcRendererManager.on(IpcEvents.SHOW_CHANNELS, (_, ...channels) => this.showChannels(channels));
     ipcRendererManager.on(IpcEvents.OPEN_SETTINGS, this.toggleSettings);
     ipcRendererManager.on(IpcEvents.SHOW_WELCOME_TOUR, this.showTour);
     ipcRendererManager.on(IpcEvents.CLEAR_CONSOLE, this.clearConsole);
@@ -368,6 +376,17 @@ export class AppState {
     this.isUpdatingElectronVersions = false;
   }
 
+  @action public hideChannels(channels: Array<ElectronReleaseChannel>) {
+    console.log(`State: hiding ${channels.join(', ')}`);
+    this.channelsToShow = this.channelsToShow.filter((ch) => !channels.includes(ch));
+  }
+
+  @action public showChannels(channels: Array<ElectronReleaseChannel>) {
+    console.log(`State: showing ${channels.join(', ')}`);
+    const s = new Set<ElectronReleaseChannel>([ ...this.channelsToShow, ...channels ]);
+    this.channelsToShow = [ ...s.values() ];
+  }
+
   @action public async getName() {
     if (!this.name) {
       this.name = await getName(this);
@@ -518,7 +537,6 @@ export class AppState {
       const updatedVersions = { ...this.versions };
       updatedVersions[version] = updatedVersions[version] || {};
       this.versions = updatedVersions;
-
       await setupBinary(this, version);
       this.updateDownloadedVersionState();
     } else {
@@ -536,6 +554,7 @@ export class AppState {
    */
   @action public async setVersion(input: string) {
     const version = normalizeVersion(input);
+    console.log('version', version, input);
 
     if (!this.versions[version]) {
       console.warn(
@@ -665,11 +684,13 @@ export class AppState {
     if (strData.startsWith('Debugger listening on ws://')) return;
     if (strData === 'For help see https://nodejs.org/en/docs/inspector') return;
 
-    this.output.push({
+    const entry: OutputEntry = {
       timestamp: Date.now(),
       text: strData.trim(),
-      isNotPre,
-    });
+      isNotPre
+    };
+    ipcRendererManager.send(IpcEvents.OUTPUT_ENTRY, entry);
+    this.output.push(entry);
   }
 
   /**
